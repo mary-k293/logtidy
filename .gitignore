@@ -1,0 +1,6 @@
+/logtidy
+/bin/
+/dist/
+*.test
+*.out
+*.prof
