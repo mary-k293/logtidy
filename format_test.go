@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -11,6 +12,31 @@ func TestNormalize(t *testing.T) {
 		in   string
 		want string
 	}{
+		{
+			name: "syslog timestamp gets the current year",
+			in:   "Jan 5 09:03:44 ERROR disk failure",
+			want: fmt.Sprintf("%d-01-05T09:03:44Z ERROR disk failure", time.Now().Year()),
+		},
+		{
+			name: "syslog timestamp with zero-padded day",
+			in:   "Jan 05 09:03:44 ERROR disk failure",
+			want: fmt.Sprintf("%d-01-05T09:03:44Z ERROR disk failure", time.Now().Year()),
+		},
+		{
+			name: "unix epoch seconds",
+			in:   "1704445424 INFO service ready",
+			want: "2024-01-05T09:03:44Z INFO service ready",
+		},
+		{
+			name: "unix epoch milliseconds",
+			in:   "1704445424000 INFO service ready",
+			want: "2024-01-05T09:03:44Z INFO service ready",
+		},
+		{
+			name: "unix epoch fractional seconds",
+			in:   "1704445424.5 INFO service ready",
+			want: "2024-01-05T09:03:44Z INFO service ready",
+		},
 		{
 			name: "space separated date and time with lowercase level",
 			in:   "2024-01-05 14:22:01   error    disk full on /dev/sda1",
@@ -123,6 +149,43 @@ func TestExtractTimestamp(t *testing.T) {
 	t.Run("empty fields returns false", func(t *testing.T) {
 		if _, _, ok := extractTimestamp(nil); ok {
 			t.Error("expected no timestamp match on empty input")
+		}
+	})
+
+	t.Run("syslog layout consumes three fields", func(t *testing.T) {
+		fields := []string{"Mar", "9", "08:15:00", "INFO", "ready"}
+		ts, consumed, ok := extractTimestamp(fields)
+		if !ok {
+			t.Fatal("expected a timestamp match")
+		}
+		if consumed != 3 {
+			t.Errorf("consumed = %d, want 3", consumed)
+		}
+		want := time.Date(time.Now().Year(), 3, 9, 8, 15, 0, 0, time.UTC)
+		if !ts.Equal(want) {
+			t.Errorf("ts = %v, want %v", ts, want)
+		}
+	})
+
+	t.Run("unix epoch seconds consumes one field", func(t *testing.T) {
+		fields := []string{"1704445424", "INFO", "ready"}
+		ts, consumed, ok := extractTimestamp(fields)
+		if !ok {
+			t.Fatal("expected a timestamp match")
+		}
+		if consumed != 1 {
+			t.Errorf("consumed = %d, want 1", consumed)
+		}
+		want := time.Date(2024, 1, 5, 9, 3, 44, 0, time.UTC)
+		if !ts.Equal(want) {
+			t.Errorf("ts = %v, want %v", ts, want)
+		}
+	})
+
+	t.Run("short number is not mistaken for an epoch", func(t *testing.T) {
+		fields := []string{"12345", "requests", "served"}
+		if _, _, ok := extractTimestamp(fields); ok {
+			t.Error("expected no timestamp match")
 		}
 	})
 }
