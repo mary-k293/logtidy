@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -188,6 +189,56 @@ func TestExtractTimestamp(t *testing.T) {
 			t.Error("expected no timestamp match")
 		}
 	})
+}
+
+func TestRender(t *testing.T) {
+	csv := template.Must(template.New("csv").Parse("{{.Timestamp}},{{.Level}},{{.Message}}"))
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "custom template fills all three fields",
+			in:   "2024-01-05T09:03:44Z ERROR disk failure",
+			want: "2024-01-05T09:03:44Z,ERROR,disk failure",
+		},
+		{
+			name: "missing level leaves an empty field rather than shifting columns",
+			in:   "2024-01-05T09:03:44Z something happened",
+			want: "2024-01-05T09:03:44Z,,something happened",
+		},
+		{
+			name: "unstructured line bypasses the template entirely",
+			in:   "just some unstructured text",
+			want: "just some unstructured text",
+		},
+		{
+			name: "blank line stays blank",
+			in:   "   ",
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Render(tc.in, csv)
+			if err != nil {
+				t.Fatalf("Render(%q) returned error: %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("Render(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderInvalidTemplateField(t *testing.T) {
+	tmpl := template.Must(template.New("bad").Parse("{{.Timestemp}} {{.Level}} {{.Message}}"))
+	if _, err := Render("2024-01-05T09:03:44Z ERROR disk failure", tmpl); err == nil {
+		t.Error("expected an error for a template referencing an unknown field")
+	}
 }
 
 func TestExtractLevel(t *testing.T) {

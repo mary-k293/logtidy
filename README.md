@@ -48,6 +48,21 @@ Output:
 just some unstructured text with extra spaces
 ```
 
+## Custom output format
+
+By default each recognised line is rewritten as `<timestamp> <LEVEL>
+<message>`. Pass `-format` with a Go
+[`text/template`](https://pkg.go.dev/text/template) string to change
+that; the fields available are `.Timestamp`, `.Level` and `.Message`:
+
+```
+logtidy -format '{{.Timestamp}},{{.Level}},{{.Message}}' app.log
+```
+
+Unstructured lines (no timestamp or level found) are passed through
+as-is regardless of `-format`, since there's nothing to fill the
+template with.
+
 ## Building
 
 Requires Go 1.22 or later and nothing else — no third-party

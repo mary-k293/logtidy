@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -49,40 +50,88 @@ var logLevels = map[string]string{
 	"CRITICAL":    "FATAL",
 }
 
-// Normalize rewrites a single raw log line as "<RFC3339 timestamp>
-// <LEVEL> <message>" wherever it can confidently find a leading
-// timestamp and level. Lines that don't start that way are passed
-// through with whitespace collapsed, so the tool never drops data
-// just because it doesn't recognise the shape.
+// DefaultFormat is the template used when the caller doesn't supply
+// its own. It reproduces the plain "<timestamp> <LEVEL> <message>"
+// shape logtidy has always produced.
+const DefaultFormat = "{{.Timestamp}} {{.Level}} {{.Message}}"
+
+// defaultTemplate is DefaultFormat, pre-parsed so Normalize doesn't
+// re-parse it on every line.
+var defaultTemplate = template.Must(template.New("default").Parse(DefaultFormat))
+
+// Record holds the pieces Normalize can pull out of a line, for use
+// as the data driving a custom -format template.
+type Record struct {
+	Timestamp string
+	Level     string
+	Message   string
+}
+
+// Normalize rewrites a single raw log line using DefaultFormat. It's
+// a thin wrapper around Render kept around because it can't fail and
+// so is convenient to call directly (tests, simple embedding).
 func Normalize(line string) string {
+	out, err := Render(line, defaultTemplate)
+	if err != nil {
+		// defaultTemplate only references Record's own fields, so
+		// execution against a Record can't fail.
+		panic(err)
+	}
+	return out
+}
+
+// Render extracts a timestamp and level from line, if it can find
+// them, and executes tmpl against the result. Lines with neither a
+// recognisable timestamp nor a recognisable level are passed through
+// unchanged (whitespace collapsed) rather than run through tmpl,
+// since there's nothing structured to fill the template with and the
+// tool should never drop data just because it doesn't recognise the
+// shape.
+func Render(line string, tmpl *template.Template) (string, error) {
 	clean := strings.TrimSpace(whitespaceRun.ReplaceAllString(line, " "))
 	if clean == "" {
-		return ""
+		return "", nil
 	}
 
+	rec, found := extractFields(clean)
+	if !found {
+		return clean, nil
+	}
+
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, rec); err != nil {
+		return "", err
+	}
+	// A field left empty by extraction (e.g. no level found) leaves
+	// behind a run of whitespace wherever the template placed it;
+	// collapse and trim those away rather than asking every -format
+	// value to account for missing fields itself.
+	return strings.TrimSpace(whitespaceRun.ReplaceAllString(buf.String(), " ")), nil
+}
+
+// extractFields pulls a timestamp, level and message out of an
+// already-whitespace-collapsed line. found is false if neither a
+// timestamp nor a level was recognised, in which case rec is not
+// meaningful.
+func extractFields(clean string) (rec Record, found bool) {
 	fields := strings.Split(clean, " ")
-	var out []string
 
 	if ts, consumed, ok := extractTimestamp(fields); ok {
-		out = append(out, ts.UTC().Format(time.RFC3339))
+		rec.Timestamp = ts.UTC().Format(time.RFC3339)
 		fields = fields[consumed:]
+		found = true
 	}
 
 	if len(fields) > 0 {
 		if lvl, ok := extractLevel(fields[0]); ok {
-			out = append(out, lvl)
+			rec.Level = lvl
 			fields = fields[1:]
+			found = true
 		}
 	}
 
-	if message := strings.Join(fields, " "); message != "" {
-		out = append(out, message)
-	}
-
-	if len(out) == 0 {
-		return clean
-	}
-	return strings.Join(out, " ")
+	rec.Message = strings.Join(fields, " ")
+	return rec, found
 }
 
 // extractTimestamp tries to parse a timestamp from the start of
